@@ -1,0 +1,16 @@
+{
+  "name": "Moto Consumo",
+  "short_name": "Consumo",
+  "description": "Control sencillo del consumo de combustible de tu motocicleta.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f5f5f3",
+  "theme_color": "#f5f5f3",
+  "lang": "es",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
