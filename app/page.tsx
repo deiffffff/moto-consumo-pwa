@@ -1,15 +1,26 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  browserLocalPersistence,
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+  setPersistence,
+  signInWithEmailAndPassword,
+  signOut,
+  type User,
+} from "firebase/auth";
+import {
+  auth,
+  deleteCloudRefuel,
+  migrateRefuels,
+  saveCloudRefuel,
+  subscribeToRefuels,
+  type Refuel,
+} from "../lib/firebase";
 
 const INITIAL_ODOMETER = 22489;
-
-type Refuel = {
-  id: string;
-  date: string;
-  odometer: number;
-  liters: number;
-};
 
 type CalculatedRefuel = Refuel & {
   distance: number;
@@ -18,6 +29,7 @@ type CalculatedRefuel = Refuel & {
 
 type Filter = "all" | "month" | "threeMonths" | "year" | "custom";
 type Tab = "records" | "summary";
+type AuthMode = "signin" | "register" | "reset";
 
 const DB_NAME = "moto-consumo";
 const STORE_NAME = "refuels";
@@ -40,24 +52,6 @@ async function getRefuels(): Promise<Refuel[]> {
   return new Promise((resolve, reject) => {
     const request = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).getAll();
     request.onsuccess = () => resolve(request.result as Refuel[]);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-async function saveRefuel(refuel: Refuel) {
-  const db = await openDatabase();
-  return new Promise<void>((resolve, reject) => {
-    const request = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).put(refuel);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
-}
-
-async function removeRefuel(id: string) {
-  const db = await openDatabase();
-  return new Promise<void>((resolve, reject) => {
-    const request = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).delete(id);
-    request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
 }
@@ -114,25 +108,85 @@ function getDateRange(filter: Filter, start: string, end: string) {
 }
 
 export default function Home() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<AuthMode>("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
   const [tab, setTab] = useState<Tab>("records");
   const [refuels, setRefuels] = useState<Refuel[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [legacyRefuels, setLegacyRefuels] = useState<Refuel[]>([]);
+  const [migrationOpen, setMigrationOpen] = useState(false);
+  const [migrationBusy, setMigrationBusy] = useState(false);
+  const [syncState, setSyncState] = useState<"synced" | "pending" | "offline">("synced");
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Refuel | null>(null);
   const [date, setDate] = useState(today());
   const [odometer, setOdometer] = useState("");
   const [liters, setLiters] = useState("");
   const [error, setError] = useState("");
+  const [appError, setAppError] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState(today());
 
   useEffect(() => {
-    getRefuels().then(setRefuels).catch(() => setError("No se pudo abrir el almacenamiento local.")).finally(() => setLoaded(true));
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register(new URL("sw.js", document.baseURI).pathname).catch(() => undefined);
     }
+    setPersistence(auth, browserLocalPersistence).catch(() => undefined);
+    return onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+    });
   }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setRefuels([]);
+      setLoaded(false);
+      setMigrationOpen(false);
+      return;
+    }
+
+    let active = true;
+    setLoaded(false);
+
+    getRefuels().then((localRefuels) => {
+      if (!active) return;
+      setLegacyRefuels(localRefuels);
+      const migrationKey = `moto-consumo-migrated-${user.uid}`;
+      setMigrationOpen(localRefuels.length > 0 && localStorage.getItem(migrationKey) !== "done");
+    }).catch(() => setLegacyRefuels([]));
+
+    const unsubscribe = subscribeToRefuels(user.uid, (cloudRefuels, pendingWrites, fromCache) => {
+      if (!active) return;
+      setRefuels(cloudRefuels);
+      setSyncState(pendingWrites ? "pending" : fromCache && !navigator.onLine ? "offline" : "synced");
+      setLoaded(true);
+    }, () => {
+      if (!active) return;
+      setAppError("No se pudieron sincronizar los registros. Revisa las reglas de Firebase.");
+      setLoaded(true);
+    });
+
+    const handleOnline = () => setSyncState((current) => current === "offline" ? "pending" : current);
+    const handleOffline = () => setSyncState("offline");
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      active = false;
+      unsubscribe();
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [user]);
 
   const calculated = useMemo(() => calculate(refuels), [refuels]);
   const newestFirst = useMemo(() => [...calculated].sort((a, b) =>
@@ -153,6 +207,71 @@ export default function Home() {
   }, [filtered]);
 
   const lastRefuel = newestFirst[0];
+
+  async function handleAuth(event: FormEvent) {
+    event.preventDefault();
+    setAuthError("");
+    setAuthMessage("");
+    const cleanEmail = email.trim();
+
+    if (!cleanEmail) {
+      setAuthError("Introduce tu correo electrónico.");
+      return;
+    }
+    if (authMode !== "reset" && password.length < 6) {
+      setAuthError("La contraseña debe tener al menos 6 caracteres.");
+      return;
+    }
+    if (authMode === "register" && password !== confirmPassword) {
+      setAuthError("Las contraseñas no coinciden.");
+      return;
+    }
+
+    setAuthBusy(true);
+    try {
+      if (authMode === "register") {
+        await createUserWithEmailAndPassword(auth, cleanEmail, password);
+      } else if (authMode === "reset") {
+        await sendPasswordResetEmail(auth, cleanEmail);
+        setAuthMessage("Te hemos enviado un correo para restablecer la contraseña.");
+      } else {
+        await signInWithEmailAndPassword(auth, cleanEmail, password);
+      }
+    } catch (caught) {
+      const code = typeof caught === "object" && caught && "code" in caught ? String(caught.code) : "";
+      if (code.includes("email-already-in-use")) setAuthError("Ya existe una cuenta con este correo.");
+      else if (code.includes("invalid-email")) setAuthError("El correo electrónico no es válido.");
+      else if (code.includes("weak-password")) setAuthError("Elige una contraseña más segura.");
+      else if (code.includes("invalid-credential")) setAuthError("El correo o la contraseña no son correctos.");
+      else if (code.includes("too-many-requests")) setAuthError("Demasiados intentos. Espera unos minutos.");
+      else setAuthError("No se pudo completar la operación. Inténtalo de nuevo.");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  function changeAuthMode(mode: AuthMode) {
+    setAuthMode(mode);
+    setAuthError("");
+    setAuthMessage("");
+    setPassword("");
+    setConfirmPassword("");
+  }
+
+  async function handleMigration() {
+    if (!user || legacyRefuels.length === 0) return;
+    setMigrationBusy(true);
+    setAppError("");
+    try {
+      await migrateRefuels(user.uid, legacyRefuels);
+      localStorage.setItem(`moto-consumo-migrated-${user.uid}`, "done");
+      setMigrationOpen(false);
+    } catch {
+      setAppError("No se pudieron incorporar los registros anteriores.");
+    } finally {
+      setMigrationBusy(false);
+    }
+  }
 
   function openNew() {
     setEditing(null);
@@ -203,8 +322,8 @@ export default function Home() {
     };
 
     try {
-      await saveRefuel(refuel);
-      setRefuels((current) => [...current.filter((item) => item.id !== refuel.id), refuel]);
+      if (!user) throw new Error("Missing user");
+      await saveCloudRefuel(user.uid, refuel, !editing);
       setFormOpen(false);
     } catch {
       setError("No se pudo guardar. Inténtalo de nuevo.");
@@ -213,8 +332,31 @@ export default function Home() {
 
   async function handleDelete(refuel: Refuel) {
     if (!window.confirm(`¿Eliminar el repostaje del ${formatDate(refuel.date, true)}?`)) return;
-    await removeRefuel(refuel.id);
-    setRefuels((current) => current.filter((item) => item.id !== refuel.id));
+    if (!user) return;
+    await deleteCloudRefuel(user.uid, refuel.id);
+  }
+
+  if (authLoading) {
+    return <div className="auth-loading">Abriendo Moto Consumo…</div>;
+  }
+
+  if (!user) {
+    return (
+      <AuthScreen
+        mode={authMode}
+        email={email}
+        password={password}
+        confirmPassword={confirmPassword}
+        busy={authBusy}
+        error={authError}
+        message={authMessage}
+        onEmail={setEmail}
+        onPassword={setPassword}
+        onConfirmPassword={setConfirmPassword}
+        onMode={changeAuthMode}
+        onSubmit={handleAuth}
+      />
+    );
   }
 
   return (
@@ -230,6 +372,17 @@ export default function Home() {
         </div>
       </header>
 
+      <div className="account-bar">
+        <div>
+          <span className={`sync-dot ${syncState}`} aria-hidden="true" />
+          <span>{syncState === "offline" ? "Sin conexión" : syncState === "pending" ? "Sincronizando…" : "Sincronizado"}</span>
+          <small>{user.email}</small>
+        </div>
+        <button onClick={() => signOut(auth)}>Cerrar sesión</button>
+      </div>
+
+      {appError && <p className="app-error" role="alert">{appError}</p>}
+
       <main>
         {tab === "records" ? (
           <section className="records-view" aria-labelledby="records-title">
@@ -238,6 +391,19 @@ export default function Home() {
               <span className="plus" aria-hidden="true">+</span>
               Añadir repostaje
             </button>
+
+            {migrationOpen && (
+              <article className="migration-card">
+                <div>
+                  <h2>Registros encontrados</h2>
+                  <p>Hay {legacyRefuels.length} {legacyRefuels.length === 1 ? "repostaje guardado" : "repostajes guardados"} en este dispositivo. Incorpóralos a tu cuenta para verlos en todos tus dispositivos.</p>
+                </div>
+                <div className="migration-actions">
+                  <button className="secondary-button" onClick={() => setMigrationOpen(false)} disabled={migrationBusy}>Ahora no</button>
+                  <button className="compact-primary" onClick={handleMigration} disabled={migrationBusy}>{migrationBusy ? "Incorporando…" : "Incorporar"}</button>
+                </div>
+              </article>
+            )}
 
             {!loaded ? (
               <div className="loading-card">Cargando registros…</div>
@@ -366,6 +532,91 @@ export default function Home() {
         </div>
       )}
     </div>
+  );
+}
+
+type AuthScreenProps = {
+  mode: AuthMode;
+  email: string;
+  password: string;
+  confirmPassword: string;
+  busy: boolean;
+  error: string;
+  message: string;
+  onEmail: (value: string) => void;
+  onPassword: (value: string) => void;
+  onConfirmPassword: (value: string) => void;
+  onMode: (mode: AuthMode) => void;
+  onSubmit: (event: FormEvent) => void;
+};
+
+function AuthScreen({
+  mode,
+  email,
+  password,
+  confirmPassword,
+  busy,
+  error,
+  message,
+  onEmail,
+  onPassword,
+  onConfirmPassword,
+  onMode,
+  onSubmit,
+}: AuthScreenProps) {
+  const title = mode === "register" ? "Crear cuenta" : mode === "reset" ? "Recuperar acceso" : "Bienvenido";
+  const description = mode === "register"
+    ? "Tus repostajes estarán disponibles en todos tus dispositivos."
+    : mode === "reset"
+      ? "Te enviaremos un enlace para elegir una contraseña nueva."
+      : "Accede a tus repostajes desde el móvil o el ordenador.";
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-card" aria-labelledby="auth-title">
+        <div className="auth-brand" aria-hidden="true"><span /></div>
+        <p className="eyebrow">Moto Consumo</p>
+        <h1 id="auth-title">{title}</h1>
+        <p className="auth-description">{description}</p>
+
+        <form onSubmit={onSubmit}>
+          <label>
+            Correo electrónico
+            <input type="email" autoComplete="email" required value={email} onChange={(event) => onEmail(event.target.value)} placeholder="tu@correo.com" />
+          </label>
+
+          {mode !== "reset" && (
+            <label>
+              Contraseña
+              <input type="password" autoComplete={mode === "register" ? "new-password" : "current-password"} required minLength={6} value={password} onChange={(event) => onPassword(event.target.value)} placeholder="Mínimo 6 caracteres" />
+            </label>
+          )}
+
+          {mode === "register" && (
+            <label>
+              Repite la contraseña
+              <input type="password" autoComplete="new-password" required minLength={6} value={confirmPassword} onChange={(event) => onConfirmPassword(event.target.value)} placeholder="Repite la contraseña" />
+            </label>
+          )}
+
+          {error && <p className="form-error" role="alert">{error}</p>}
+          {message && <p className="form-success" role="status">{message}</p>}
+
+          <button className="primary-button" type="submit" disabled={busy}>
+            {busy ? "Espera…" : mode === "register" ? "Crear cuenta" : mode === "reset" ? "Enviar enlace" : "Iniciar sesión"}
+          </button>
+        </form>
+
+        <div className="auth-links">
+          {mode === "signin" && <button onClick={() => onMode("reset")}>He olvidado mi contraseña</button>}
+          {mode === "signin" ? (
+            <p>¿No tienes cuenta? <button onClick={() => onMode("register")}>Crear cuenta</button></p>
+          ) : (
+            <button onClick={() => onMode("signin")}>Volver a iniciar sesión</button>
+          )}
+        </div>
+      </section>
+    </main>
   );
 }
 

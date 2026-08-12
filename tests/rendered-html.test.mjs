@@ -15,8 +15,7 @@ test("renders Moto Consumo app shell and PWA metadata", async () => {
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /<title>Moto Consumo<\/title>/i);
-  assert.match(html, /Añadir repostaje/);
-  assert.match(html, /22\.489/);
+  assert.match(html, /Abriendo Moto Consumo/);
   assert.match(html, /manifest\.webmanifest/);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|react-loading-skeleton/);
 });

@@ -1,0 +1,33 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/refuels/{refuelId} {
+      allow read, delete: if ownsData(userId);
+      allow create, update: if ownsData(userId) && validRefuel();
+    }
+
+    function ownsData(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function validRefuel() {
+      return request.resource.data.keys().hasAll([
+          'date', 'odometer', 'liters', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'date', 'odometer', 'liters', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.date is string
+        && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.odometer is int
+        && request.resource.data.odometer > 22489
+        && request.resource.data.odometer < 2000000
+        && request.resource.data.liters is number
+        && request.resource.data.liters > 0
+        && request.resource.data.liters <= 100
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp;
+    }
+  }
+}
