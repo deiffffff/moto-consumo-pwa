@@ -117,6 +117,7 @@ export default function Home() {
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [vehicleNickname, setVehicleNickname] = useState("");
   const [vehiclePlate, setVehiclePlate] = useState("");
+  const [vehicleInitialOdometer, setVehicleInitialOdometer] = useState("");
   const [vehicleError, setVehicleError] = useState("");
   const [vehicleBusy, setVehicleBusy] = useState(false);
 
@@ -212,19 +213,31 @@ export default function Home() {
   function changeAuthMode(mode: AuthMode) { setAuthMode(mode); setAuthError(""); setAuthMessage(""); setPassword(""); setConfirmPassword(""); }
 
   function openVehicle(vehicle?: Vehicle) {
-    setEditingVehicle(vehicle ?? null); setVehicleNickname(vehicle?.nickname ?? ""); setVehiclePlate(vehicle?.plate ?? ""); setVehicleError(""); setVehicleSheetOpen(true);
+    setEditingVehicle(vehicle ?? null);
+    setVehicleNickname(vehicle?.nickname ?? "");
+    setVehiclePlate(vehicle?.plate ?? "");
+    setVehicleInitialOdometer(vehicle?.initialOdometer == null ? "" : String(vehicle.initialOdometer));
+    setVehicleError("");
+    setVehicleSheetOpen(true);
   }
 
   async function handleVehicle(event: FormEvent) {
     event.preventDefault();
     const nickname = vehicleNickname.trim(); const plate = normalizePlate(vehiclePlate);
+    const initialOdometer = vehicleInitialOdometer.trim() === "" ? null : Number(vehicleInitialOdometer.replace(",", "."));
     if (!nickname || plate.length < 3) { setVehicleError("Introduce un apodo y una matrícula válidos."); return; }
+    if (initialOdometer !== null && (!Number.isInteger(initialOdometer) || initialOdometer < 0 || initialOdometer >= 2000000)) { setVehicleError("La lectura inicial debe ser un número entero válido."); return; }
     if (vehicles.some((item) => item.id !== editingVehicle?.id && normalizePlate(item.plate) === plate)) { setVehicleError("Ya existe un vehículo con esta matrícula."); return; }
+    const relevantExistingRefuels = editingVehicle
+      ? refuels.filter((item) => item.vehicleId === editingVehicle.id)
+      : vehicles.length === 0 ? [...unassignedRefuels, ...localPending] : [];
+    const firstExistingOdometer = relevantExistingRefuels.reduce<number | null>((minimum, item) => minimum === null ? item.odometer : Math.min(minimum, item.odometer), null);
+    if (initialOdometer !== null && firstExistingOdometer !== null && initialOdometer >= firstExistingOdometer) { setVehicleError(`La lectura inicial debe ser menor que el primer repostaje (${formatNumber(firstExistingOdometer)} km).`); return; }
     if (!user) return;
     setVehicleBusy(true); setVehicleError("");
     const vehicle: Vehicle = {
       id: editingVehicle?.id ?? crypto.randomUUID(), nickname, plate,
-      initialOdometer: editingVehicle?.initialOdometer ?? ((vehicles.length === 0 && (unassignedRefuels.length || localPending.length)) ? LEGACY_INITIAL_ODOMETER : null),
+      initialOdometer: initialOdometer ?? ((!editingVehicle && vehicles.length === 0 && (unassignedRefuels.length || localPending.length)) ? LEGACY_INITIAL_ODOMETER : null),
     };
     try {
       await saveVehicle(user.uid, vehicle, !editingVehicle);
@@ -319,11 +332,11 @@ export default function Home() {
           <section className="records-view" aria-labelledby="records-title">
             <h2 id="records-title" className="sr-only">Registros de repostaje</h2>
             <button className="primary-button" onClick={openNew}><span className="plus">+</span>Añadir repostaje</button>
-            {newestFirst.length === 0 ? <div className="empty-state"><div className="empty-mark"><span /></div><h3>Primer repostaje de {selectedVehicle?.nickname}</h3><p>Este primer registro establecerá la referencia del odómetro. El consumo aparecerá a partir del siguiente depósito lleno.</p></div> : (
+            {newestFirst.length === 0 ? <div className="empty-state"><div className="empty-mark"><span /></div><h3>Primer repostaje de {selectedVehicle?.nickname}</h3><p>{selectedVehicle?.initialOdometer == null ? "Este primer registro establecerá la referencia del odómetro. Sus litros no se incluirán en las estadísticas y el consumo aparecerá desde el siguiente depósito lleno." : `El consumo se calculará desde la lectura inicial de ${formatNumber(selectedVehicle.initialOdometer)} km.`}</p></div> : (
               <div className="record-list"><div className="section-heading"><h2>Historial</h2><span>{newestFirst.length} {newestFirst.length === 1 ? "registro" : "registros"}</span></div>
                 {newestFirst.map((item) => <article className="record-card" key={item.id}>
                   <div className="record-card-header"><div><time dateTime={item.date}>{formatDate(item.date)}</time><p>{selectedVehicle?.nickname} · {formatNumber(item.odometer)} km</p></div><div className="record-actions"><button onClick={() => openEdit(item)}>Editar</button><button className="danger-link" onClick={() => handleDeleteRefuel(item)}>Eliminar</button></div></div>
-                  <div className="record-metrics"><div><span>Repostado</span><strong>{formatNumber(item.liters, 2)} L</strong></div><div><span>Recorridos</span><strong>{item.measurable ? `${formatNumber(item.distance)} km` : "—"}</strong></div><div className="consumption-metric"><span>Consumo</span><strong>{item.measurable ? formatNumber(item.consumption, 2) : "—"} <small>L/100 km</small></strong></div></div>
+                  <div className="record-metrics"><div><span>Repostado</span><strong>{formatNumber(item.liters, 2)} L {!item.measurable && <small>no computa</small>}</strong></div><div><span>Recorridos</span><strong>{item.measurable ? `${formatNumber(item.distance)} km` : "—"}</strong></div><div className="consumption-metric"><span>Consumo</span><strong>{item.measurable ? formatNumber(item.consumption, 2) : "—"} <small>L/100 km</small></strong></div></div>
                 </article>)}
               </div>
             )}
@@ -345,7 +358,7 @@ export default function Home() {
 
       {formOpen && <Sheet title={editing ? "Editar repostaje" : "Nuevo repostaje"} eyebrow="Depósito lleno" onClose={() => setFormOpen(false)}><form onSubmit={handleSubmit}><label>Vehículo<select required value={formVehicleId} onChange={(event) => setFormVehicleId(event.target.value)}>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.nickname} · {vehicle.plate}</option>)}</select></label><label>Fecha<input type="date" required value={date} onChange={(event) => setDate(event.target.value)} /></label><label>Kilometraje<div className="input-with-unit"><input inputMode="numeric" type="text" required placeholder="Ej. 23180" value={odometer} onChange={(event) => setOdometer(event.target.value)} /><span>km</span></div></label><label>Litros repostados<div className="input-with-unit"><input inputMode="decimal" type="text" required placeholder="Ej. 12,45" value={liters} onChange={(event) => setLiters(event.target.value)} /><span>L</span></div></label>{formError && <p className="form-error" role="alert">{formError}</p>}<button className="primary-button submit-button" type="submit">{editing ? "Guardar cambios" : "Guardar repostaje"}</button></form></Sheet>}
 
-      {vehicleSheetOpen && <Sheet title={editingVehicle ? "Editar vehículo" : "Nuevo vehículo"} eyebrow="Tu garaje" onClose={() => setVehicleSheetOpen(false)}><form onSubmit={handleVehicle}><label>Apodo<input type="text" required maxLength={40} placeholder="Ej. Honda, Scooter…" value={vehicleNickname} onChange={(event) => setVehicleNickname(event.target.value)} /></label><label>Matrícula<input className="plate-input" type="text" required maxLength={12} autoCapitalize="characters" placeholder="Ej. 1234ABC" value={vehiclePlate} onChange={(event) => setVehiclePlate(event.target.value.toUpperCase())} /></label>{vehicleError && <p className="form-error" role="alert">{vehicleError}</p>}<button className="primary-button submit-button" type="submit" disabled={vehicleBusy}>{vehicleBusy ? "Guardando…" : editingVehicle ? "Guardar cambios" : "Añadir vehículo"}</button>{editingVehicle && <button type="button" className="delete-vehicle" onClick={() => handleDeleteVehicle(editingVehicle)}>Eliminar vehículo</button>}</form>{vehicles.length > 0 && !editingVehicle && <div className="garage-list"><h3>Mis vehículos</h3>{vehicles.map((vehicle) => <button key={vehicle.id} onClick={() => openVehicle(vehicle)}><span><strong>{vehicle.nickname}</strong><small>{vehicle.plate}</small></span><i>Editar</i></button>)}</div>}</Sheet>}
+      {vehicleSheetOpen && <Sheet title={editingVehicle ? "Editar vehículo" : "Nuevo vehículo"} eyebrow="Tu garaje" onClose={() => setVehicleSheetOpen(false)}><form onSubmit={handleVehicle}><label>Apodo<input type="text" required maxLength={40} placeholder="Ej. Honda, Scooter…" value={vehicleNickname} onChange={(event) => setVehicleNickname(event.target.value)} /></label><label>Matrícula<input className="plate-input" type="text" required maxLength={12} autoCapitalize="characters" placeholder="Ej. 1234ABC" value={vehiclePlate} onChange={(event) => setVehiclePlate(event.target.value.toUpperCase())} /></label><label>Lectura actual del cuentakilómetros <small className="optional-label">Opcional</small><div className="input-with-unit"><input inputMode="numeric" type="text" placeholder="Ej. 22489" value={vehicleInitialOdometer} onChange={(event) => setVehicleInitialOdometer(event.target.value)} /><span>km</span></div><small className="field-help">Si lo dejas vacío, el primer repostaje será solo la referencia inicial y sus litros no contarán en las estadísticas.</small></label>{vehicleError && <p className="form-error" role="alert">{vehicleError}</p>}<button className="primary-button submit-button" type="submit" disabled={vehicleBusy}>{vehicleBusy ? "Guardando…" : editingVehicle ? "Guardar cambios" : "Añadir vehículo"}</button>{editingVehicle && <button type="button" className="delete-vehicle" onClick={() => handleDeleteVehicle(editingVehicle)}>Eliminar vehículo</button>}</form>{vehicles.length > 0 && !editingVehicle && <div className="garage-list"><h3>Mis vehículos</h3>{vehicles.map((vehicle) => <button key={vehicle.id} onClick={() => openVehicle(vehicle)}><span><strong>{vehicle.nickname}</strong><small>{vehicle.plate}{vehicle.initialOdometer == null ? " · Sin lectura inicial" : ` · Inicio ${formatNumber(vehicle.initialOdometer)} km`}</small></span><i>Editar</i></button>)}</div>}</Sheet>}
     </div>
   );
 }
