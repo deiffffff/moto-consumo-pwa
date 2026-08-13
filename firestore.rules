@@ -2,26 +2,51 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    match /users/{userId}/vehicles/{vehicleId} {
+      allow read, delete: if ownsData(userId);
+      allow create, update: if ownsData(userId) && validVehicle();
+    }
+
     match /users/{userId}/refuels/{refuelId} {
       allow read, delete: if ownsData(userId);
-      allow create, update: if ownsData(userId) && validRefuel();
+      allow create, update: if ownsData(userId) && validRefuel(userId);
     }
 
     function ownsData(userId) {
       return request.auth != null && request.auth.uid == userId;
     }
 
-    function validRefuel() {
+    function validVehicle() {
       return request.resource.data.keys().hasAll([
-          'date', 'odometer', 'liters', 'createdAt', 'updatedAt'
+          'nickname', 'plate', 'initialOdometer', 'createdAt', 'updatedAt'
         ])
         && request.resource.data.keys().hasOnly([
-          'date', 'odometer', 'liters', 'createdAt', 'updatedAt'
+          'nickname', 'plate', 'initialOdometer', 'createdAt', 'updatedAt'
         ])
+        && request.resource.data.nickname is string
+        && request.resource.data.nickname.size() >= 1
+        && request.resource.data.nickname.size() <= 40
+        && request.resource.data.plate is string
+        && request.resource.data.plate.size() >= 3
+        && request.resource.data.plate.size() <= 12
+        && (request.resource.data.initialOdometer == null || request.resource.data.initialOdometer is int)
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp;
+    }
+
+    function validRefuel(userId) {
+      return request.resource.data.keys().hasAll([
+          'vehicleId', 'date', 'odometer', 'liters', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'vehicleId', 'date', 'odometer', 'liters', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.vehicleId is string
+        && exists(/databases/$(database)/documents/users/$(userId)/vehicles/$(request.resource.data.vehicleId))
         && request.resource.data.date is string
         && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
         && request.resource.data.odometer is int
-        && request.resource.data.odometer > 22489
+        && request.resource.data.odometer >= 0
         && request.resource.data.odometer < 2000000
         && request.resource.data.liters is number
         && request.resource.data.liters > 0

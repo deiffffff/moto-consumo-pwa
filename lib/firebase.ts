@@ -14,8 +14,16 @@ import {
   setDoc,
 } from "firebase/firestore";
 
+export type Vehicle = {
+  id: string;
+  nickname: string;
+  plate: string;
+  initialOdometer: number | null;
+};
+
 export type Refuel = {
   id: string;
+  vehicleId?: string;
   date: string;
   odometer: number;
   liters: number;
@@ -32,11 +40,9 @@ const firebaseConfig = {
 };
 
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
-
 export const auth = getAuth(app);
 
 let firestore: Firestore;
-
 try {
   firestore = initializeFirestore(app, {
     localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
@@ -44,43 +50,45 @@ try {
 } catch {
   firestore = getFirestore(app);
 }
-
 export const db = firestore;
 
-function refuelsCollection(userId: string) {
-  return collection(db, "users", userId, "refuels");
-}
+const userCollection = (userId: string, name: "refuels" | "vehicles") =>
+  collection(db, "users", userId, name);
 
 function isRefuel(value: unknown): value is Omit<Refuel, "id"> {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   return typeof record.date === "string"
     && typeof record.odometer === "number"
-    && typeof record.liters === "number";
+    && typeof record.liters === "number"
+    && (record.vehicleId === undefined || typeof record.vehicleId === "string");
 }
 
-export function subscribeToRefuels(
-  userId: string,
-  onData: (refuels: Refuel[], pendingWrites: boolean, fromCache: boolean) => void,
-  onError: () => void,
-) {
-  return onSnapshot(
-    refuelsCollection(userId),
-    { includeMetadataChanges: true },
-    (snapshot) => {
-      const refuels = snapshot.docs.flatMap((snapshotDoc) => {
-        const data = snapshotDoc.data();
-        return isRefuel(data) ? [{ id: snapshotDoc.id, ...data }] : [];
-      });
-      onData(refuels, snapshot.metadata.hasPendingWrites, snapshot.metadata.fromCache);
-    },
-    onError,
-  );
+function isVehicle(value: unknown): value is Omit<Vehicle, "id"> {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.nickname === "string"
+    && typeof record.plate === "string"
+    && (record.initialOdometer === null || typeof record.initialOdometer === "number");
 }
 
-export async function saveCloudRefuel(userId: string, refuel: Refuel, isNew: boolean) {
-  const target = doc(refuelsCollection(userId), refuel.id);
-  await setDoc(target, {
+export function subscribeToRefuels(userId: string, onData: (items: Refuel[], pending: boolean, cached: boolean) => void, onError: () => void) {
+  return onSnapshot(userCollection(userId, "refuels"), { includeMetadataChanges: true }, (snapshot) => {
+    const items = snapshot.docs.flatMap((entry) => isRefuel(entry.data()) ? [{ id: entry.id, ...entry.data() } as Refuel] : []);
+    onData(items, snapshot.metadata.hasPendingWrites, snapshot.metadata.fromCache);
+  }, onError);
+}
+
+export function subscribeToVehicles(userId: string, onData: (items: Vehicle[]) => void, onError: () => void) {
+  return onSnapshot(userCollection(userId, "vehicles"), (snapshot) => {
+    const items = snapshot.docs.flatMap((entry) => isVehicle(entry.data()) ? [{ id: entry.id, ...entry.data() } as Vehicle] : []);
+    onData(items.sort((a, b) => a.nickname.localeCompare(b.nickname, "es")));
+  }, onError);
+}
+
+export async function saveCloudRefuel(userId: string, refuel: Required<Refuel>, isNew: boolean) {
+  await setDoc(doc(userCollection(userId, "refuels"), refuel.id), {
+    vehicleId: refuel.vehicleId,
     date: refuel.date,
     odometer: refuel.odometer,
     liters: refuel.liters,
@@ -90,15 +98,34 @@ export async function saveCloudRefuel(userId: string, refuel: Refuel, isNew: boo
 }
 
 export async function deleteCloudRefuel(userId: string, refuelId: string) {
-  await deleteDoc(doc(refuelsCollection(userId), refuelId));
+  await deleteDoc(doc(userCollection(userId, "refuels"), refuelId));
 }
 
-export async function migrateRefuels(userId: string, refuels: Refuel[]) {
-  await Promise.all(refuels.map((refuel) => setDoc(doc(refuelsCollection(userId), refuel.id), {
+export async function saveVehicle(userId: string, vehicle: Vehicle, isNew: boolean) {
+  await setDoc(doc(userCollection(userId, "vehicles"), vehicle.id), {
+    nickname: vehicle.nickname,
+    plate: vehicle.plate,
+    initialOdometer: vehicle.initialOdometer,
+    updatedAt: serverTimestamp(),
+    ...(isNew ? { createdAt: serverTimestamp() } : {}),
+  }, { merge: true });
+}
+
+export async function deleteVehicle(userId: string, vehicleId: string) {
+  await deleteDoc(doc(userCollection(userId, "vehicles"), vehicleId));
+}
+
+export async function assignRefuelsToVehicle(userId: string, vehicleId: string, refuels: Refuel[]) {
+  await Promise.all(refuels.map((refuel) => setDoc(doc(userCollection(userId, "refuels"), refuel.id), {
+    vehicleId,
     date: refuel.date,
     odometer: refuel.odometer,
     liters: refuel.liters,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }, { merge: true })));
+}
+
+export async function migrateRefuels(userId: string, vehicleId: string, refuels: Refuel[]) {
+  return assignRefuelsToVehicle(userId, vehicleId, refuels);
 }

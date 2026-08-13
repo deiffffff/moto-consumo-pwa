@@ -30,7 +30,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 
 .sr-only {
@@ -77,6 +77,8 @@ button { -webkit-tap-highlight-color: transparent; }
   font-weight: 760;
 }
 
+.vehicle-settings { min-height: 42px; padding: 0 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--accent); font-size: 12px; font-weight: 700; cursor: pointer; }
+
 .odometer-origin {
   min-width: 102px;
   padding: 9px 12px;
@@ -107,6 +109,12 @@ button { -webkit-tap-highlight-color: transparent; }
 .sync-dot.pending { background: #e09b22; }
 .sync-dot.offline { background: var(--muted); }
 .app-error { margin: -7px 2px 16px; padding: 11px 13px; border-radius: 12px; background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); font-size: 12px; line-height: 1.4; }
+
+.vehicle-switcher { display: flex; align-items: flex-end; gap: 9px; margin-bottom: 18px; }
+.vehicle-switcher label { flex: 1; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.vehicle-switcher label > span { display: block; margin: 0 2px 6px; }
+.vehicle-switcher select, .form-sheet select { width: 100%; height: 50px; padding: 0 38px 0 13px; border: 1px solid var(--line); border-radius: 13px; outline: none; background: var(--surface); color: var(--text); font-size: 15px; font-weight: 650; }
+.vehicle-switcher button { min-height: 50px; padding: 0 13px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); color: var(--accent); font-size: 12px; font-weight: 700; cursor: pointer; }
 
 .primary-button {
   width: 100%;
@@ -145,13 +153,14 @@ button { -webkit-tap-highlight-color: transparent; }
 .empty-mark::after { width: 3px; height: 24px; top: 20px; left: 30px; }
 
 .record-list { margin-top: 32px; }
-.migration-card { margin-top: 12px; padding: 16px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 16px; background: var(--accent-soft); }
+.migration-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 18px; padding: 16px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 16px; background: var(--accent-soft); }
 .migration-card h2 { margin: 0; font-size: 15px; letter-spacing: -.015em; }
 .migration-card p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .migration-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 13px; }
 .secondary-button, .compact-primary { min-height: 38px; padding: 0 14px; border-radius: 11px; font-size: 12px; font-weight: 700; cursor: pointer; }
 .secondary-button { border: 1px solid var(--line); background: var(--surface); color: var(--muted); }
 .compact-primary { border: 0; background: var(--accent); color: white; }
+.vehicle-empty .primary-button { margin-top: 22px; }
 .section-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin: 0 2px 13px; }
 .section-heading h2 { margin: 0; font-size: 18px; letter-spacing: -.025em; }
 .section-heading p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
@@ -261,13 +270,22 @@ button { -webkit-tap-highlight-color: transparent; }
 .close-button { width: 42px; height: 42px; border: 0; border-radius: 50%; background: var(--surface-2); color: var(--muted); font-size: 28px; line-height: 1; cursor: pointer; }
 .form-sheet form { display: grid; gap: 18px; }
 .form-sheet label { color: var(--muted); font-size: 12px; font-weight: 650; }
-.form-sheet input { width: 100%; height: 52px; margin-top: 7px; padding: 0 14px; border: 1px solid var(--line); border-radius: 13px; outline: none; background: var(--bg); color: var(--text); font-size: 16px; }
+.form-sheet input, .form-sheet select { width: 100%; height: 52px; margin-top: 7px; padding: 0 14px; border: 1px solid var(--line); border-radius: 13px; outline: none; background: var(--bg); color: var(--text); font-size: 16px; }
 .form-sheet input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.plate-input { letter-spacing: .08em; font-weight: 750; text-transform: uppercase; }
 .input-with-unit { position: relative; }
 .input-with-unit input { padding-right: 48px; }
 .input-with-unit span { position: absolute; right: 15px; bottom: 17px; color: var(--muted); font-size: 14px; }
 .form-error { margin: -4px 2px 0; color: var(--danger); font-size: 13px; line-height: 1.35; }
 .submit-button { margin-top: 2px; }
+.delete-vehicle { min-height: 46px; border: 0; background: transparent; color: var(--danger); font-size: 13px; font-weight: 700; cursor: pointer; }
+.garage-list { margin-top: 27px; padding-top: 20px; border-top: 1px solid var(--line); }
+.garage-list h3 { margin: 0 0 10px; font-size: 14px; }
+.garage-list > button { width: 100%; min-height: 58px; padding: 8px 2px; display: flex; align-items: center; justify-content: space-between; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.garage-list span, .garage-list strong, .garage-list small { display: block; }
+.garage-list strong { font-size: 14px; }
+.garage-list small { margin-top: 3px; color: var(--muted); font-size: 11px; letter-spacing: .06em; }
+.garage-list i { color: var(--accent); font-size: 12px; font-style: normal; font-weight: 650; }
 
 .auth-loading { min-height: 100dvh; display: grid; place-content: center; padding: 24px; background: var(--bg); color: var(--muted); font-size: 14px; }
 .auth-shell { min-height: 100dvh; display: grid; place-items: center; padding: max(24px, env(safe-area-inset-top)) 18px max(24px, env(safe-area-inset-bottom)); }
